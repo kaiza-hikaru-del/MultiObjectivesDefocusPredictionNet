@@ -55,11 +55,12 @@ def validation_epoch(model, loader, criterion, device):
     return total_loss / len(loader.dataset)
 
 
-# 检查点保存逻辑
+# 检查点保存逻辑 只保存最好或需要的点
 def save_checkpoint(state, is_best, filename, best_filename):
-    torch.save(state, filename)
     if is_best:
         torch.save(state, best_filename)
+    else:
+        torch.save(state, filename)
 
 
 # 主训练函数
