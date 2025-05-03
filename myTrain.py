@@ -55,14 +55,6 @@ def validation_epoch(model, loader, criterion, device):
     return total_loss / len(loader.dataset)
 
 
-# 检查点保存逻辑 只保存最好或需要的点
-def save_checkpoint(state, is_best, filename, best_filename):
-    if is_best:
-        torch.save(state, best_filename)
-    else:
-        torch.save(state, filename)
-
-
 # 主训练函数
 def main():
     args = parse_args()
@@ -167,19 +159,29 @@ def main():
             elif epoch >= 600:
                 save_regular = True
                 
-            if save_regular or is_best:
-                save_checkpoint(
-                    {
-                        'epoch': epoch,
-                        'model': model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'best_loss': best_loss,
-                        'args': vars(args)
-                    },
-                    is_best=is_best,
-                    filename=ckpt_path,
-                    best_filename=best_ckpt
-                )
+            # 保存常规检查点（独立判断）
+            if save_regular:
+                torch.save({
+                    'epoch': epoch,
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'best_loss': best_loss,
+                    'args': vars(args)
+                }, ckpt_path)
+                print(f"保存常规检查点: {ckpt_path.name}")
+
+            # 保存最佳检查点（独立判断）
+            is_best = val_loss < best_loss
+            if is_best:
+                best_loss = val_loss
+                torch.save({
+                    'epoch': epoch,
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'best_loss': best_loss,
+                    'args': vars(args)
+                }, best_ckpt)
+                print(f"保存最佳检查点: {best_ckpt.name} (loss={best_loss:.4f})")
             
             # 训练信息输出
             epoch_time = time.time() - start_time
