@@ -1,4 +1,2 @@
 __pycache__/
-.ckpts/
-runs
-*.onnx
+.*

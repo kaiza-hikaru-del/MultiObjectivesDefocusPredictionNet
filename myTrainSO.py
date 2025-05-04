@@ -8,6 +8,8 @@ from myDataset import SOAFDataset
 from myModel import SOAFModel
 from torchvision import transforms
 
+from tqdm.rich import tqdm
+
 
 # 训练参数配置
 def parse_args():
@@ -26,7 +28,7 @@ def parse_args():
 def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
     total_loss = 0.0
-    for images, labels in loader:
+    for images, labels in tqdm(loader):
         images = images.to(device)
         labels = labels.unsqueeze(1).to(device)  # 保持维度一致
         
@@ -45,7 +47,7 @@ def validation_epoch(model, loader, criterion, device):
     model.eval()
     total_loss = 0.0
     with torch.no_grad():
-        for images, labels in loader:
+        for images, labels in tqdm(loader):
             images = images.to(device)
             labels = labels.unsqueeze(1).to(device)
             
@@ -107,7 +109,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     
     # 检查点设置
-    ckpt_dir = Path('.ckpts')
+    ckpt_dir = Path(f'.ckpts/{args.fe_str}')
     ckpt_dir.mkdir(exist_ok=True)
     best_ckpt = ckpt_dir / 'ckpt_best.pt'
     
@@ -125,7 +127,7 @@ def main():
         print(f'从检查点恢复训练，当前轮数：{start_epoch}，最佳损失：{best_loss:.4f}')
     
     # TensorBoard配置
-    with SummaryWriter('runs/experiment') as writer:
+    with SummaryWriter(f'.runs/{args.fe_str}') as writer:
         for epoch in range(start_epoch, args.epochs):
             start_time = time.time()
             
@@ -152,9 +154,9 @@ def main():
             save_regular = False
             if epoch < 200 and epoch % 10 == 0:
                 save_regular = True
-            elif epoch < 400 and epoch % 5 == 0:
+            elif 200 <= epoch and epoch < 400 and epoch % 5 == 0:
                 save_regular = True
-            elif epoch < 600 and epoch % 3 == 0:
+            elif 400 <= epoch and epoch < 600 and epoch % 3 == 0:
                 save_regular = True
             elif epoch >= 600:
                 save_regular = True

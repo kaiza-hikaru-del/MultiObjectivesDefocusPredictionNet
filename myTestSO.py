@@ -10,6 +10,8 @@ from myDataset import SOAFDataset
 from myModel import SOAFModel
 from torchvision import transforms
 
+from tqdm.rich import tqdm
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -20,10 +22,10 @@ def parse_args():
     return parser.parse_args()
 
 
-def convert_to_onnx(pt_model, device, save_dir=".onnx"):
-    save_dir = Path(save_dir)
+def convert_to_onnx(pt_model, device, save_model):
+    save_dir = Path(".onnx")
     save_dir.mkdir(exist_ok=True)
-    onnx_path = save_dir / "model_best.onnx"
+    onnx_path = save_dir / f"{save_model}_best.onnx"
     
     dummy_input = torch.randn(1, 3, 224, 224).to(device)
     
@@ -48,7 +50,7 @@ def test_pytorch_model(model, loader, device):
     all_preds = []
     
     with torch.no_grad():
-        for images, labels in loader:
+        for images, labels in tqdm(loader):
             images = images.to(device)
             outputs = model(images).cpu().numpy()
             
@@ -59,11 +61,13 @@ def test_pytorch_model(model, loader, device):
 
 
 def test_onnx_model(onnx_path, dataset):
-    session = onnxruntime.InferenceSession(onnx_path)
+    session = onnxruntime.InferenceSession(onnx_path, providers=["CUDAExecutionProvider"])
+    print(f"ONNX session providers: {session.get_providers()}")
+    print(f"ONNX session provider options: {session.get_provider_options()}")
     all_preds = []
     time_costs = []
     
-    for img, label in dataset:
+    for img, label in tqdm(dataset):
         img_tensor = img.unsqueeze(0).numpy()  # Add batch dimension
         
         start_time = time.perf_counter()
@@ -79,8 +83,8 @@ def test_onnx_model(onnx_path, dataset):
     return all_preds, time_costs
 
 
-def save_results(results, save_dir=".results"):
-    save_dir = Path(save_dir)
+def save_results(results, save_result):
+    save_dir = Path(".results")
     save_dir.mkdir(exist_ok=True)
     
     # 创建DataFrame并指定列名
@@ -103,7 +107,7 @@ def save_results(results, save_dir=".results"):
         'onnx_time_cost': 'float64'
     })
     
-    csv_path = save_dir / "test_results.csv"
+    csv_path = save_dir / f"{save_result}_results.csv"
     df.to_csv(csv_path, index=False)
     print(f"测试结果已保存至: {csv_path}")
 
@@ -130,7 +134,7 @@ def main():
     
     # 初始化模型并加载最佳检查点
     model = SOAFModel(model_name=args.fe_str).to(device)
-    ckpt = torch.load(Path('.ckpts') / 'ckpt_best.pt')
+    ckpt = torch.load(Path('.ckpts') / args.fe_str / 'ckpt_best.pt')
     model.load_state_dict(ckpt['model'])
     
     # 转换ONNX模型
@@ -139,9 +143,11 @@ def main():
     
     # 测试PyTorch模型
     labels, pt_preds = test_pytorch_model(model, test_loader, device)
+    print("PyTorch模型测试结束")
     
     # 测试ONNX模型
     onnx_preds, onnx_times = test_onnx_model(onnx_path, test_set)
+    print("ONNX模型测试结束")
     
     # 收集结果
     results = []
