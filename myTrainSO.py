@@ -143,10 +143,6 @@ def main():
             writer.add_scalar('Loss/val', val_loss, epoch)
             writer.add_scalar('Learning Rate', current_lr, epoch)
             
-            # 检查点保存逻辑
-            is_best = val_loss < best_loss
-            best_loss = min(val_loss, best_loss)
-            
             # 生成检查点文件名
             ckpt_path = ckpt_dir / f'ckpt_{epoch:04d}.pt'
             

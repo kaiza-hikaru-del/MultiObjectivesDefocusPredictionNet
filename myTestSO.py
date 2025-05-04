@@ -138,7 +138,7 @@ def main():
     model.load_state_dict(ckpt['model'])
     
     # 转换ONNX模型
-    onnx_path = convert_to_onnx(model, device)
+    onnx_path = convert_to_onnx(model, device, args.fe_str)
     print(f"ONNX模型已保存至: {onnx_path}")
     
     # 测试PyTorch模型
@@ -161,7 +161,7 @@ def main():
         ))
     
     # 保存结果
-    save_results(results)
+    save_results(results, args.fe_str)
 
 if __name__ == '__main__':
     main()
