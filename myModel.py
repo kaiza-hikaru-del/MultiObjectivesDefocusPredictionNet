@@ -50,23 +50,6 @@ class SOAFModel(nn.Module):
         return self.fc(flattened)
 
 
-def export_onnx(model, device, save_path="soaf_model.onnx"):
-    dummy_input = torch.randn(1, 3, 224, 224).to(device)
-    torch.onnx.export(
-        model,
-        dummy_input,
-        save_path,
-        input_names=["input"],
-        output_names=["output"],
-        dynamic_axes={
-            "input": {0: "batch_size"},
-            "output": {0: "batch_size"}
-        },
-        opset_version=13  # 添加明确的操作集版本
-    )
-    print(f"ONNX模型已导出至: {save_path}")
-
-
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = SOAFModel().to(device)
@@ -88,5 +71,19 @@ if __name__ == "__main__":
 
     # 导出ONNX
     model.eval()
-    export_onnx(model, device)
+    save_path = "test_soaf_model.onnx"
+    dummy_input = torch.randn(1, 3, 224, 224).to(device)
+    torch.onnx.export(
+        model,
+        dummy_input,
+        save_path,
+        input_names=["input"],
+        output_names=["output"],
+        dynamic_axes={
+            "input": {0: "batch_size"},
+            "output": {0: "batch_size"}
+        },
+        opset_version=13  # 添加明确的操作集版本
+    )
+    print(f"ONNX模型已导出至: {save_path}")
 
