@@ -24,8 +24,8 @@ def parse_args():
 
 def convert_to_onnx(pt_model, device, save_model):
     save_dir = Path(".onnx")
-    save_dir.mkdir(exist_ok=True)
-    onnx_path = save_dir / f"{save_model}_best.onnx"
+    save_dir.mkdir(exist_ok=True, parents=True)
+    onnx_path = save_dir / f"SO_{save_model}_best.onnx"
     
     dummy_input = torch.randn(1, 3, 224, 224).to(device)
     
@@ -85,7 +85,7 @@ def test_onnx_model(onnx_path, dataset):
 
 def save_results(results, save_result):
     save_dir = Path(".results")
-    save_dir.mkdir(exist_ok=True)
+    save_dir.mkdir(exist_ok=True, parents=True)
     
     # 创建DataFrame并指定列名
     df = pd.DataFrame(results, columns=[
@@ -107,7 +107,7 @@ def save_results(results, save_result):
         'onnx_time_cost': 'float64'
     })
     
-    csv_path = save_dir / f"{save_result}_results.csv"
+    csv_path = save_dir / f"SO_{save_result}_results.csv"
     df.to_csv(csv_path, index=False)
     print(f"测试结果已保存至: {csv_path}")
 
@@ -134,7 +134,7 @@ def main():
     
     # 初始化模型并加载最佳检查点
     model = SOAFModel(model_name=args.fe_str).to(device)
-    ckpt = torch.load(Path('.ckpts') / args.fe_str / 'ckpt_best.pt')
+    ckpt = torch.load(Path('.ckpts') / f"SO_{args.fe_str}" / 'ckpt_best.pt')
     model.load_state_dict(ckpt['model'])
     
     # 转换ONNX模型

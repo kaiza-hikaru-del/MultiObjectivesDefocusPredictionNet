@@ -51,16 +51,8 @@ class SOAFModel(nn.Module):
 
 
 class FiLMLayer(nn.Module):
-    """FiLM特征调制层"""
-    def __init__(self, feature_dim):
-        super().__init__()
-        self.gamma = nn.Linear(feature_dim, feature_dim)
-        self.beta = nn.Linear(feature_dim, feature_dim)
-        
-    def forward(self, x, condition):
-        gamma = self.gamma(condition)
-        beta = self.beta(condition)
-        return gamma * x + beta
+    def forward(self, x, gamma, beta):
+        return gamma * x + beta  # 直接使用外部参数
 
 
 class MOAFModel(nn.Module):
@@ -101,13 +93,11 @@ class MOAFModel(nn.Module):
             nn.Linear(2, 64),  # 输入为(magnification, NA)
             nn.ReLU(inplace=True),
             nn.Linear(64, 128),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, 128),
             nn.ReLU(inplace=True)
         )
         
         # FiLM调制层
-        self.film = FiLMLayer(64)
+        self.film = FiLMLayer()
         
         # 最终回归网络
         self.regressor = nn.Sequential(
@@ -130,13 +120,13 @@ class MOAFModel(nn.Module):
         beta_feat = aux_feat[:, 64:]      # 分割后半部分作为beta参数
         
         # FiLM特征融合
-        fused_feat = self.film(img_feat, gamma_feat)
+        fused_feat = self.film(img_feat, gamma_feat, beta_feat)
         
         # 最终回归
         return self.regressor(fused_feat)
 
 
-if __name__ == "__main__":
+def MOAF_info_with_onnx():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MOAFModel().to(device)
     
@@ -149,7 +139,7 @@ if __name__ == "__main__":
         print(f"输出形状: {output.shape}")  # 预期输出: torch.Size([2, 1])
     
     # 打印模型结构
-    # summary(model, input_data=[(1, 3, 224, 224), (1, 2)])
+    summary(model, input_size=[(1, 3, 224, 224), (1, 2)])
     
     # 导出ONNX模型
     model.eval()
@@ -172,40 +162,43 @@ if __name__ == "__main__":
     print("ONNX模型导出完成")
 
 
-# if __name__ == "__main__":
-#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#     model = SOAFModel().to(device)
+def SOAF_info_with_onnx():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = SOAFModel().to(device)
 
-#     # 验证修改后的特征维度计算
-#     test_input = torch.randn(2, 3, 224, 224).to(device)
-#     with torch.no_grad():
-#         features = model.feature_extractor(test_input)[0]
-#         pooled = model.global_pool(features)
-#         print(f"池化后特征形状: {pooled.shape}")  # 应显示如 torch.Size([2, 512, 1, 1])
-#         print(f"全连接输入维度: {model.fc[0].in_features}")  # 显示实际特征维度
+    # 验证修改后的特征维度计算
+    test_input = torch.randn(2, 3, 224, 224).to(device)
+    with torch.no_grad():
+        features = model.feature_extractor(test_input)[0]
+        pooled = model.global_pool(features)
+        print(f"池化后特征形状: {pooled.shape}")  # 应显示如 torch.Size([2, 512, 1, 1])
+        print(f"全连接输入维度: {model.fc[0].in_features}")  # 显示实际特征维度
 
-#     # 测试推理
-#     output = model(test_input)
-#     print(f"\n批量测试输出形状: {output.shape}")  # 应显示 torch.Size([2, 1])
+    # 测试推理
+    output = model(test_input)
+    print(f"\n批量测试输出形状: {output.shape}")  # 应显示 torch.Size([2, 1])
 
-#     # 打印模型结构
-#     summary(model, input_size=(1, 3, 224, 224))
+    # 打印模型结构
+    summary(model, input_size=(1, 3, 224, 224))
 
-#     # 导出ONNX
-#     model.eval()
-#     save_path = "test_soaf_model.onnx"
-#     dummy_input = torch.randn(1, 3, 224, 224).to(device)
-#     torch.onnx.export(
-#         model,
-#         dummy_input,
-#         save_path,
-#         input_names=["input"],
-#         output_names=["output"],
-#         dynamic_axes={
-#             "input": {0: "batch_size"},
-#             "output": {0: "batch_size"}
-#         },
-#         opset_version=13  # 添加明确的操作集版本
-#     )
-#     print(f"ONNX模型已导出至: {save_path}")
+    # 导出ONNX
+    model.eval()
+    dummy_input = torch.randn(1, 3, 224, 224).to(device)
+    torch.onnx.export(
+        model,
+        dummy_input,
+        "test_soaf_model.onnx",
+        input_names=["input"],
+        output_names=["output"],
+        dynamic_axes={
+            "input": {0: "batch_size"},
+            "output": {0: "batch_size"}
+        },
+        opset_version=13  # 添加明确的操作集版本
+    )
+    print(f"ONNX模型导出完成")
+
+
+if __name__ == "__main__":
+    MOAF_info_with_onnx()
 

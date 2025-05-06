@@ -4,10 +4,9 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from myDataset import SOAFDataset
-from myModel import SOAFModel
+from myDataset import MOAFDataset
+from myModel import MOAFModel
 from torchvision import transforms
-
 from tqdm.rich import tqdm
 
 
@@ -28,12 +27,13 @@ def parse_args():
 def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
     total_loss = 0.0
-    for images, labels in tqdm(loader):
+    for images, aux_inputs, labels in tqdm(loader, desc="Training", leave=False):
         images = images.to(device)
+        aux_inputs = aux_inputs.to(device)
         labels = labels.unsqueeze(1).to(device)  # 保持维度一致
         
         optimizer.zero_grad()
-        outputs = model(images)
+        outputs = model(images, aux_inputs)
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -47,11 +47,12 @@ def validation_epoch(model, loader, criterion, device):
     model.eval()
     total_loss = 0.0
     with torch.no_grad():
-        for images, labels in tqdm(loader):
+        for images, aux_inputs, labels in tqdm(loader, desc="Validation", leave=False):
             images = images.to(device)
+            aux_inputs = aux_inputs.to(device)
             labels = labels.unsqueeze(1).to(device)
             
-            outputs = model(images)
+            outputs = model(images, aux_inputs)
             loss = criterion(outputs, labels)
             total_loss += loss.item() * images.size(0)
     return total_loss / len(loader.dataset)
@@ -72,17 +73,17 @@ def main():
     val_transform = transforms.ToTensor()
     
     # 数据集加载
-    train_set = SOAFDataset(
+    train_set = MOAFDataset(
         root_dir=Path(args.root_dir),
         dataset_type='train',
         transform=train_transform,
-        glob_pattern="20x_0.7*.csv"
+        glob_pattern="*.csv"
     )
-    val_set = SOAFDataset(
+    val_set = MOAFDataset(
         root_dir=Path(args.root_dir),
         dataset_type='val',
         transform=val_transform,
-        glob_pattern="20x_0.7*.csv"
+        glob_pattern="*.csv"
     )
     
     train_loader = DataLoader(
@@ -104,12 +105,12 @@ def main():
     print("Data loaded")
     
     # 模型初始化
-    model = SOAFModel(model_name=args.fe_str).to(device)
+    model = MOAFModel(model_name=args.fe_str).to(device)
     criterion = torch.nn.L1Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     
     # 检查点设置
-    ckpt_dir = Path(f'.ckpts/SO_{args.fe_str}')
+    ckpt_dir = Path(f'.ckpts/MO_{args.fe_str}')
     ckpt_dir.mkdir(exist_ok=True, parents=True)
     best_ckpt = ckpt_dir / 'ckpt_best.pt'
     
@@ -127,7 +128,7 @@ def main():
         print(f'从检查点恢复训练，当前轮数：{start_epoch}，最佳损失：{best_loss:.4f}')
     
     # TensorBoard配置
-    with SummaryWriter(f'.runs/SO_{args.fe_str}') as writer:
+    with SummaryWriter(f'.runs/MO_{args.fe_str}') as writer:
         for epoch in range(start_epoch, args.epochs):
             start_time = time.time()
             
@@ -150,9 +151,9 @@ def main():
             save_regular = False
             if epoch < 200 and epoch % 10 == 0:
                 save_regular = True
-            elif 200 <= epoch and epoch < 400 and epoch % 5 == 0:
+            elif 200 <= epoch < 400 and epoch % 5 == 0:
                 save_regular = True
-            elif 400 <= epoch and epoch < 600 and epoch % 3 == 0:
+            elif 400 <= epoch < 600 and epoch % 3 == 0:
                 save_regular = True
             elif epoch >= 600:
                 save_regular = True
