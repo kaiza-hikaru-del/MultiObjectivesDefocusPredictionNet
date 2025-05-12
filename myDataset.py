@@ -48,8 +48,8 @@ class MOAFDataset(Dataset):
         if missing_cols:
             raise ValueError(f"CSV文件缺少必要列: {missing_cols}")
 
-        # 向量化处理路径
-        combined_df['abs_image_path'] = root_dir / combined_df['image_path']
+        # 向量化处理路径并将反斜杠全部替换为正斜杠
+        combined_df['abs_image_path'] = root_dir / combined_df['image_path'].str.replace('\\', '/', regex=False)
         
         # 转换为绝对路径列表（替代字典存储）
         self.image_paths = combined_df['abs_image_path'].tolist()
@@ -122,8 +122,8 @@ class SOAFDataset(Dataset):
         if missing_cols:
             raise ValueError(f"CSV文件缺少必要列: {missing_cols}")
 
-        # 路径处理
-        combined_df['abs_image_path'] = self.root_dir / combined_df['image_path']
+        # 向量化处理路径并将反斜杠全部替换为正斜杠
+        combined_df['abs_image_path'] = root_dir / combined_df['image_path'].str.replace('\\', '/', regex=False)
         
         # 转换为高效数据结构
         self.image_paths = combined_df['abs_image_path'].tolist()

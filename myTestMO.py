@@ -9,23 +9,24 @@ from torch.utils.data import DataLoader
 from myDataset import MOAFDataset
 from myModel import MOAFModel
 from torchvision import transforms
-
 from tqdm.rich import tqdm
 
 
+# 参数解析
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root_dir', type=str, required=True, help='数据集根目录')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--fe_str', type=str, default='mobilenetv4_conv_small')
+    parser.add_argument('--fusion_mode', type=str, default='film', help='特征融合模式，可选: film, add, concat, gating')
     return parser.parse_args()
 
 
-def convert_to_onnx(pt_model, device, save_model):
+def convert_to_onnx(pt_model, device, fe_str, fusion_mode):
     save_dir = Path(".onnx")
     save_dir.mkdir(exist_ok=True, parents=True)
-    onnx_path = save_dir / f"MO_{save_model}_best.onnx"
+    onnx_path = save_dir / f"MO_{fe_str}_{fusion_mode}_best.onnx"
     
     # 创建 dummy 输入（图像 + 辅助输入）
     dummy_image = torch.randn(1, 3, 224, 224).to(device)
@@ -90,7 +91,7 @@ def test_onnx_model(onnx_path, dataset):
     return all_preds, time_costs
 
 
-def save_results(results, save_result):
+def save_results(results, fe_str, fusion_mode):
     save_dir = Path(".results")
     save_dir.mkdir(exist_ok=True, parents=True)
     
@@ -105,8 +106,8 @@ def save_results(results, save_result):
         'onnx_time_cost'
     ])
     
-    # 添加路径处理（可选）
-    df['image_path'] = df['image_path'].astype(str)
+    # 添加路径处理
+    df['image_path'] = df['image_path'].str.replace('\\', '/', regex=False)
     
     # 优化数据类型
     df = df.astype({
@@ -118,7 +119,7 @@ def save_results(results, save_result):
         'onnx_time_cost': 'float64'
     })
     
-    csv_path = save_dir / f"MO_{save_result}_results.csv"
+    csv_path = save_dir / f"MO_{fe_str}_{fusion_mode}_results.csv"
     df.to_csv(csv_path, index=False)
     print(f"测试结果已保存至: {csv_path}")
 
@@ -144,12 +145,15 @@ def main():
     )
     
     # 初始化模型并加载最佳检查点
-    model = MOAFModel(model_name=args.fe_str).to(device)
-    ckpt = torch.load(Path('.ckpts') / f"MO_{args.fe_str}" / 'ckpt_best.pt')
+    model = MOAFModel(model_name=args.fe_str, fusion_mode=args.fusion_mode).to(device)
+    ckpt = torch.load(
+        Path('.ckpts') / f"MO_{args.fe_str}_{args.fusion_mode}" / 'ckpt_best.pt',
+        map_location=device
+    )
     model.load_state_dict(ckpt['model'])
     
     # 转换ONNX模型
-    onnx_path = convert_to_onnx(model, device, args.fe_str)
+    onnx_path = convert_to_onnx(model, device, args.fe_str, args.fusion_mode)
     print(f"ONNX模型已保存至: {onnx_path}")
     
     # 测试PyTorch模型
@@ -174,7 +178,7 @@ def main():
         ))
     
     # 保存结果
-    save_results(results, args.fe_str)
+    save_results(results, args.fe_str, args.fusion_mode)
 
 if __name__ == '__main__':
     main()

@@ -9,7 +9,6 @@ from torch.utils.data import DataLoader
 from myDataset import SOAFDataset
 from myModel import SOAFModel
 from torchvision import transforms
-
 from tqdm.rich import tqdm
 
 

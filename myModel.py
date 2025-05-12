@@ -51,35 +51,72 @@ class SOAFModel(nn.Module):
 
 
 class FiLMLayer(nn.Module):
-    def forward(self, x, gamma, beta):
-        return gamma * x + beta  # 直接使用外部参数
+    def __init__(self, in_dim: int = 64):
+        super().__init__()
+        self.in_dim = in_dim
+
+    def forward(self, img_feat, aux_feat):
+        gamma = aux_feat[:, :self.in_dim]
+        beta = aux_feat[:, self.in_dim:]
+        return gamma * img_feat + beta
+
+
+class AdditiveFusion(nn.Module):
+    def forward(self, img_feat, aux_feat):
+        return img_feat + aux_feat
+
+
+class ConcatFusion(nn.Module):
+    def __init__(self, in_dim: int = 64):
+        super().__init__()
+        self.downsample = nn.Linear(in_dim * 2, in_dim)
+
+    def forward(self, img_feat, aux_feat):
+        combined = torch.cat([img_feat, aux_feat], dim=1)
+        return self.downsample(combined)
+
+
+class GatingFusion(nn.Module):
+    def __init__(self, in_dim: int = 64):
+        super().__init__()
+        self.gate = nn.Linear(in_dim * 2, in_dim)
+
+    def forward(self, img_feat, aux_feat):
+        combined = torch.cat([img_feat, aux_feat], dim=1)
+        gate_weights = torch.sigmoid(self.gate(combined))
+        return gate_weights * img_feat + (1 - gate_weights) * aux_feat
+
+
+class NoFusion(nn.Module):
+    def forward(self, img_feat, aux_feat):
+        return img_feat  # 直接返回图像特征，忽略辅助输入
 
 
 class MOAFModel(nn.Module):
-    def __init__(self, 
-                 model_name: str = "mobilenetv4_conv_small", 
+    def __init__(self,
+                 model_name: str = "mobilenetv4_conv_small",
+                 fusion_mode: str = "film",
                  pretrained: bool = True):
         super().__init__()
-        
-        # 图像特征提取器
+        self.fusion_mode = fusion_mode
+
+        # 图像特征提取
         self.feature_extractor = timm.create_model(
-            model_name,
-            pretrained=pretrained,
-            features_only=True,
-            out_indices=(-1,),
+            model_name, 
+            pretrained=pretrained, 
+            features_only=True, 
+            out_indices=(-1,)
         )
-        
-        # 全局平均池化
         self.global_pool = nn.AdaptiveAvgPool2d(1)
-        
-        # 动态获取特征维度
-        dummy_img = torch.randn(1, 3, 224, 224)
+
+        # 动态获取图像特征维度
         with torch.no_grad():
+            dummy_img = torch.randn(1, 3, 224, 224)
             features = self.feature_extractor(dummy_img)[0]
             pooled = self.global_pool(features)
-        img_feat_dim = pooled.view(pooled.size(0), -1).shape[-1]
-        
-        # 图像特征降维网络
+            img_feat_dim = pooled.view(1, -1).shape[-1]
+
+        # 图像降维网络（统一结构）
         self.img_fc = nn.Sequential(
             nn.Linear(img_feat_dim, 256),
             nn.ReLU(inplace=True),
@@ -87,18 +124,42 @@ class MOAFModel(nn.Module):
             nn.Linear(256, 64),
             nn.ReLU(inplace=True)
         )
-        
-        # 辅助参数处理网络
-        self.aux_fc = nn.Sequential(
-            nn.Linear(2, 64),  # 输入为(magnification, NA)
-            nn.ReLU(inplace=True),
-            nn.Linear(64, 128),
-            nn.ReLU(inplace=True)
-        )
-        
-        # FiLM调制层
-        self.film = FiLMLayer()
-        
+
+        # 辅助输入处理网络（根据融合模式调整）
+        if fusion_mode in ["add", "concat", "gating"]:
+            self.aux_fc = nn.Sequential(
+                nn.Linear(2, 32),
+                nn.ReLU(inplace=True),
+                nn.Linear(32, 64),
+                nn.ReLU(inplace=True)
+            )
+        elif fusion_mode == "film":
+            self.aux_fc = nn.Sequential(
+                nn.Linear(2, 64),
+                nn.ReLU(inplace=True),
+                nn.Linear(64, 128),
+                nn.ReLU(inplace=True)
+            )
+        elif fusion_mode == "no_fusion":
+            # 无融合模式下，辅助输入无需处理（可选：保留空结构或移除）
+            self.aux_fc = nn.Identity()  # 保留空结构，避免 forward 中报错
+        else:
+            raise ValueError(f"不支持的融合模式: {fusion_mode}")
+
+        # 特征融合模块（显式传入 in_dim）
+        if fusion_mode == "film":
+            self.fusion_layer = FiLMLayer(in_dim=64)
+        elif fusion_mode == "add":
+            self.fusion_layer = AdditiveFusion()
+        elif fusion_mode == "concat":
+            self.fusion_layer = ConcatFusion(in_dim=64)
+        elif fusion_mode == "gating":
+            self.fusion_layer = GatingFusion(in_dim=64)
+        elif fusion_mode == "no_fusion":
+            self.fusion_layer = NoFusion()  # 添加 no_fusion 融合层
+        else:
+            raise ValueError(f"不支持的融合模式: {fusion_mode}")
+
         # 最终回归网络
         self.regressor = nn.Sequential(
             nn.Linear(64, 32),
@@ -108,27 +169,20 @@ class MOAFModel(nn.Module):
         )
 
     def forward(self, img, aux_input):
-        # 图像特征提取
         img_feat = self.feature_extractor(img)[0]
-        img_feat = self.global_pool(img_feat)
-        img_feat = torch.flatten(img_feat, 1)
+        img_feat = self.global_pool(img_feat).flatten(1)
         img_feat = self.img_fc(img_feat)  # [B, 64]
-        
-        # 辅助参数处理
-        aux_feat = self.aux_fc(aux_input)  # [B, 128]
-        gamma_feat = aux_feat[:, :64]      # 分割前半部分作为gamma参数
-        beta_feat = aux_feat[:, 64:]      # 分割后半部分作为beta参数
-        
-        # FiLM特征融合
-        fused_feat = self.film(img_feat, gamma_feat, beta_feat)
-        
-        # 最终回归
+
+        aux_feat = self.aux_fc(aux_input)  # [B, 64] 或 [B, 128]
+
+        fused_feat = self.fusion_layer(img_feat, aux_feat)
         return self.regressor(fused_feat)
 
 
 def MOAF_info_with_onnx():
+    fusion_mode = "no_fusion"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = MOAFModel().to(device)
+    model = MOAFModel(fusion_mode=fusion_mode).to(device)
     
     # 验证输入输出维度
     test_img = torch.randn(2, 3, 224, 224).to(device)
@@ -149,7 +203,7 @@ def MOAF_info_with_onnx():
     torch.onnx.export(
         model,
         (dummy_img, dummy_aux),
-        "moaf_model.onnx",
+        f"moaf_model_{fusion_mode}.onnx",
         input_names=["image_input", "aux_input"],
         output_names=["output"],
         dynamic_axes={

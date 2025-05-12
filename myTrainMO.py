@@ -1,13 +1,16 @@
+import os
 import argparse
 import time
 from pathlib import Path
 import torch
+from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from myDataset import MOAFDataset
 from myModel import MOAFModel
 from torchvision import transforms
 from tqdm.rich import tqdm
+from datetime import datetime
 
 
 # 训练参数配置
@@ -19,6 +22,8 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--fe_str', type=str, default='mobilenetv4_conv_small')
+    parser.add_argument('--fusion_mode', type=str, default='film', help='特征融合模式，可选: film, add, concat, gating')
+    parser.add_argument('--device_ids', type=str, default='0', help='使用的GPU编号，例如 0,1,2 或留空使用CPU')
     parser.add_argument('--resume', action='store_true', help='从最佳检查点恢复训练')
     return parser.parse_args()
 
@@ -31,13 +36,13 @@ def train_epoch(model, loader, criterion, optimizer, device):
         images = images.to(device)
         aux_inputs = aux_inputs.to(device)
         labels = labels.unsqueeze(1).to(device)  # 保持维度一致
-        
+
         optimizer.zero_grad()
         outputs = model(images, aux_inputs)
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
-        
+
         total_loss += loss.item() * images.size(0)
     return total_loss / len(loader.dataset)
 
@@ -51,7 +56,7 @@ def validation_epoch(model, loader, criterion, device):
             images = images.to(device)
             aux_inputs = aux_inputs.to(device)
             labels = labels.unsqueeze(1).to(device)
-            
+
             outputs = model(images, aux_inputs)
             loss = criterion(outputs, labels)
             total_loss += loss.item() * images.size(0)
@@ -61,9 +66,14 @@ def validation_epoch(model, loader, criterion, device):
 # 主训练函数
 def main():
     args = parse_args()
+
+    # === 多 GPU 配置 ===
+    # 解析 device_ids 参数
+    device_ids = [int(i) for i in args.device_ids.split(',')] if ',' in args.device_ids else [int(args.device_ids)]
+    os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(map(str, device_ids))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
-    
+    print(f"Using device: {device}, GPU IDs: {device_ids}")
+
     # 数据预处理
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -71,7 +81,7 @@ def main():
         transforms.ToTensor()
     ])
     val_transform = transforms.ToTensor()
-    
+
     # 数据集加载
     train_set = MOAFDataset(
         root_dir=Path(args.root_dir),
@@ -85,7 +95,7 @@ def main():
         transform=val_transform,
         glob_pattern="*.csv"
     )
-    
+
     train_loader = DataLoader(
         train_set,
         batch_size=args.batch_size,
@@ -103,50 +113,56 @@ def main():
         persistent_workers=True
     )
     print("Data loaded")
-    
-    # 模型初始化
-    model = MOAFModel(model_name=args.fe_str).to(device)
+
+    # === 模型初始化 ===
+    model = MOAFModel(model_name=args.fe_str, fusion_mode=args.fusion_mode).to(device)
+
+    # === 多 GPU 并行训练 ===
+    if len(device_ids) > 1 and torch.cuda.device_count() > 1:
+        print(f"Using DataParallel with {len(device_ids)} GPUs")
+        model = nn.DataParallel(model, device_ids=device_ids)
+
     criterion = torch.nn.L1Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    
-    # 检查点设置
-    ckpt_dir = Path(f'.ckpts/MO_{args.fe_str}')
+
+    # === 检查点设置 ===
+    ckpt_dir = Path(f'.ckpts/MO_{args.fe_str}_{args.fusion_mode}')
     ckpt_dir.mkdir(exist_ok=True, parents=True)
     best_ckpt = ckpt_dir / 'ckpt_best.pt'
-    
+
     start_epoch = 0
     best_loss = float('inf')
     print("Model created")
-    
-    # 恢复训练
+
+    # === 恢复训练 ===
     if args.resume and best_ckpt.exists():
-        checkpoint = torch.load(best_ckpt)
-        model.load_state_dict(checkpoint['model'])
+        checkpoint = torch.load(best_ckpt, map_location=device)
+        model.load_state_dict(checkpoint['model'], strict=False)  # 允许部分加载
         optimizer.load_state_dict(checkpoint['optimizer'])
         start_epoch = checkpoint['epoch'] + 1
         best_loss = checkpoint['best_loss']
         print(f'从检查点恢复训练，当前轮数：{start_epoch}，最佳损失：{best_loss:.4f}')
-    
-    # TensorBoard配置
-    with SummaryWriter(f'.runs/MO_{args.fe_str}') as writer:
+
+    # === TensorBoard 配置 ===
+    with SummaryWriter(f'.runs/MO_{args.fe_str}_{args.fusion_mode}') as writer:
         for epoch in range(start_epoch, args.epochs):
             start_time = time.time()
-            
+
             # 训练与验证
             train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
             val_loss = validation_epoch(model, val_loader, criterion, device)
-            
+
             # 学习率记录
             current_lr = optimizer.param_groups[0]['lr']
-            
+
             # TensorBoard记录
             writer.add_scalar('Loss/train', train_loss, epoch)
             writer.add_scalar('Loss/val', val_loss, epoch)
             writer.add_scalar('Learning Rate', current_lr, epoch)
-            
+
             # 生成检查点文件名
             ckpt_path = ckpt_dir / f'ckpt_{epoch:04d}.pt'
-            
+
             # 按条件保存常规检查点
             save_regular = False
             if epoch < 200 and epoch % 10 == 0:
@@ -157,12 +173,14 @@ def main():
                 save_regular = True
             elif epoch >= 600:
                 save_regular = True
-                
+
             # 保存常规检查点（独立判断）
             if save_regular:
+                # 保存时不带 DataParallel 的 module 前缀
+                save_model = model.module if isinstance(model, nn.DataParallel) else model
                 torch.save({
                     'epoch': epoch,
-                    'model': model.state_dict(),
+                    'model': save_model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'best_loss': best_loss,
                     'args': vars(args)
@@ -173,21 +191,24 @@ def main():
             is_best = val_loss < best_loss
             if is_best:
                 best_loss = val_loss
+                save_model = model.module if isinstance(model, nn.DataParallel) else model
                 torch.save({
                     'epoch': epoch,
-                    'model': model.state_dict(),
+                    'model': save_model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'best_loss': best_loss,
                     'args': vars(args)
                 }, best_ckpt)
                 print(f"保存最佳检查点: {best_ckpt.name} (loss={best_loss:.4f})")
-            
+
             # 训练信息输出
             epoch_time = time.time() - start_time
+            formatted_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f'Epoch {epoch+1}/{args.epochs} | '
                   f'Train Loss: {train_loss:.4f} | '
                   f'Val Loss: {val_loss:.4f} | '
-                  f'Time: {epoch_time:.2f}s')
+                  f'Time: {epoch_time:.2f}s | '
+                  f'Timestamp: {formatted_time}')
 
 
 if __name__ == '__main__':
