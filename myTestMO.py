@@ -43,7 +43,6 @@ def convert_to_onnx(pt_model, device, fe_str, fusion_mode):
             "aux_input": {0: "batch_size"},
             "output": {0: "batch_size"}
         },
-        opset_version=13
     )
     return onnx_path
 
@@ -118,6 +117,25 @@ def save_results(results, fe_str, fusion_mode):
         'onnx_pred': 'float32',
         'onnx_time_cost': 'float64'
     })
+
+    # 添加基于已有列计算的新列
+    df['pt_error'] = (df['label'] - df['pt_pred']).abs()
+    df['pt_signed_error'] = df['label'] - df['pt_pred']
+    df['pt_direction'] = np.sign(df['label'] * df['pt_pred'])
+
+    df['onnx_error'] = (df['label'] - df['onnx_pred']).abs()
+    df['onnx_signed_error'] = df['label'] - df['onnx_pred']
+    df['onnx_direction'] = np.sign(df['label'] * df['onnx_pred'])
+
+    # 添加统计信息作为新列
+    df['pt_error_mean'] = df['pt_error'].mean()
+    df['pt_error_std'] = df['pt_error'].std()
+
+    df['onnx_error_mean'] = df['onnx_error'].mean()
+    df['onnx_error_std'] = df['onnx_error'].std()
+
+    df['onnx_time_cost_mean'] = df['onnx_time_cost'].mean()
+    df['onnx_time_cost_std'] = df['onnx_time_cost'].std()
     
     csv_path = save_dir / f"MO_{fe_str}_{fusion_mode}_results.csv"
     df.to_csv(csv_path, index=False)

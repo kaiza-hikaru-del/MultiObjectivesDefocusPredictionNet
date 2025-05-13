@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import argparse
 from pathlib import Path
 
@@ -66,6 +67,25 @@ def main():
         'label', 'pt_pred', 'onnx_pred', 'onnx_time_cost'
     ]
     grouped_df = grouped_df[columns_order]
+
+        # 添加基于已有列计算的新列
+    grouped_df['pt_error'] = (grouped_df['label'] - grouped_df['pt_pred']).abs()
+    grouped_df['pt_signed_error'] = grouped_df['label'] - grouped_df['pt_pred']
+    grouped_df['pt_direction'] = np.sign(grouped_df['label'] * grouped_df['pt_pred'])
+
+    grouped_df['onnx_error'] = (grouped_df['label'] - grouped_df['onnx_pred']).abs()
+    grouped_df['onnx_signed_error'] = grouped_df['label'] - grouped_df['onnx_pred']
+    grouped_df['onnx_direction'] = np.sign(grouped_df['label'] * grouped_df['onnx_pred'])
+
+    # 添加统计信息作为新列
+    grouped_df['pt_error_mean'] = grouped_df['pt_error'].mean()
+    grouped_df['pt_error_std'] = grouped_df['pt_error'].std()
+
+    grouped_df['onnx_error_mean'] = grouped_df['onnx_error'].mean()
+    grouped_df['onnx_error_std'] = grouped_df['onnx_error'].std()
+
+    grouped_df['onnx_time_cost_mean'] = grouped_df['onnx_time_cost'].mean()
+    grouped_df['onnx_time_cost_std'] = grouped_df['onnx_time_cost'].std()
 
     # 保存处理结果
     grouped_df.to_csv(args.output_path, index=False)

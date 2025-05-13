@@ -136,7 +136,7 @@ def main():
 
     # === 恢复训练 ===
     if args.resume and best_ckpt.exists():
-        checkpoint = torch.load(best_ckpt, map_location=device)
+        checkpoint = torch.load(best_ckpt, map_location=device, weights_only=True)
         model.load_state_dict(checkpoint['model'], strict=False)  # 允许部分加载
         optimizer.load_state_dict(checkpoint['optimizer'])
         start_epoch = checkpoint['epoch'] + 1

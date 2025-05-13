@@ -6,7 +6,7 @@ from torchinfo import summary
 class SOAFModel(nn.Module):
     def __init__(self, 
                  model_name: str = "mobilenetv4_conv_small", 
-                 pretrained: bool = True):
+                 pretrained: bool = False):
         super().__init__()
         
         # 创建特征提取器（使用-1获取最后一个特征层）
@@ -96,7 +96,7 @@ class MOAFModel(nn.Module):
     def __init__(self,
                  model_name: str = "mobilenetv4_conv_small",
                  fusion_mode: str = "film",
-                 pretrained: bool = True):
+                 pretrained: bool = False):
         super().__init__()
         self.fusion_mode = fusion_mode
 
@@ -211,7 +211,6 @@ def MOAF_info_with_onnx():
             "aux_input": {0: "batch_size"},
             "output": {0: "batch_size"}
         },
-        opset_version=13
     )
     print("ONNX模型导出完成")
 
@@ -248,7 +247,6 @@ def SOAF_info_with_onnx():
             "input": {0: "batch_size"},
             "output": {0: "batch_size"}
         },
-        opset_version=13  # 添加明确的操作集版本
     )
     print(f"ONNX模型导出完成")
 
