@@ -15,18 +15,20 @@ from tqdm.rich import tqdm
 # 参数解析
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root_dir', type=str, required=True, help='数据集根目录')
+    parser.add_argument('--dataset_dir', type=str, required=True, help='数据集根目录')
+    parser.add_argument('--dataset_choice', type=str, default="all", help='数据集筛选条件，可选: all, <magnification>_<NA>')
+    parser.add_argument('--label_choice', type=str, default="dof_score", help='数据集标签形式，可选: dof_score, defocus_distance')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--fe_str', type=str, default='mobilenetv4_conv_small')
-    parser.add_argument('--fusion_mode', type=str, default='film', help='特征融合模式，可选: film, add, concat, gating')
+    parser.add_argument('--fusion_mode', type=str, default='film', help='特征融合模式，可选: no_fusion, add, concat, film, gating')
     return parser.parse_args()
 
 
-def convert_to_onnx(pt_model, device, fe_str, fusion_mode):
+def convert_to_onnx(pt_model, device, fe_str, fusion_mode, dataset_choice, label_choice):
     save_dir = Path(".onnx")
     save_dir.mkdir(exist_ok=True, parents=True)
-    onnx_path = save_dir / f"MO_{fe_str}_{fusion_mode}_best.onnx"
+    onnx_path = save_dir / f"MO_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_best.onnx"
     
     # 创建 dummy 输入（图像 + 辅助输入）
     dummy_image = torch.randn(1, 3, 224, 224).to(device)
@@ -65,7 +67,7 @@ def test_pytorch_model(model, loader, device):
     return all_labels, all_preds
 
 
-def test_onnx_model(onnx_path, dataset):
+def test_onnx_model(onnx_path, dataset, fusion_mode):
     session = onnxruntime.InferenceSession(onnx_path, providers=["CUDAExecutionProvider"])
     print(f"ONNX session providers: {session.get_providers()}")
     print(f"ONNX session provider options: {session.get_provider_options()}")
@@ -78,10 +80,19 @@ def test_onnx_model(onnx_path, dataset):
         aux_tensor = aux.unsqueeze(0).numpy()
         
         start_time = time.perf_counter()
-        pred = session.run(
+        
+        # 处理无融合情况下没有 aux_input
+        if fusion_mode == "no_fusion":
+            pred = session.run(
             ["output"],
-            {"image": img_tensor, "aux_input": aux_tensor}
+            {"image": img_tensor}
         )[0][0][0]
+        else:
+            pred = session.run(
+                ["output"],
+                {"image": img_tensor, "aux_input": aux_tensor}
+            )[0][0][0]
+
         time_cost = time.perf_counter() - start_time
         
         all_preds.append(pred)
@@ -90,10 +101,11 @@ def test_onnx_model(onnx_path, dataset):
     return all_preds, time_costs
 
 
-def save_results(results, fe_str, fusion_mode):
+def save_results(results, fe_str, fusion_mode, dataset_choice, label_choice):
     save_dir = Path(".results")
     save_dir.mkdir(exist_ok=True, parents=True)
     
+    # === 未分组结果 ===
     # 创建DataFrame并指定列名
     df = pd.DataFrame(results, columns=[
         'image_path', 
@@ -137,21 +149,89 @@ def save_results(results, fe_str, fusion_mode):
     df['onnx_time_cost_mean'] = df['onnx_time_cost'].mean()
     df['onnx_time_cost_std'] = df['onnx_time_cost'].std()
     
-    csv_path = save_dir / f"MO_{fe_str}_{fusion_mode}_results.csv"
+    csv_path = save_dir / f"MO_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_results.csv"
     df.to_csv(csv_path, index=False)
-    print(f"测试结果已保存至: {csv_path}")
+    print(f"原始测试结果已保存至: {csv_path}")
+
+    # === 分组后结果 ===
+    # 使用正则表达式提取关键字段
+    pattern = r"^.*?/(\d+)x_(\d+\.\d+)_\w+/sample(\d+)/field(\d+)/roi\d+/(\d+)\.jpg$"
+    extracted = df['image_path'].str.extract(pattern, expand=True)
+
+    # 检查提取结果（可选调试）
+    if extracted.isnull().any().any():
+        print("！警告：部分路径匹配失败，以下为失败示例：")
+        failed_paths = df[extracted.isnull().any(axis=1)]['image_path'].head(5)
+        for p in failed_paths:
+            print(f"  - {p}")
+
+    # 将提取结果添加为新列
+    df['magnification'] = pd.to_numeric(extracted[0], errors='coerce')
+    df['NA'] = pd.to_numeric(extracted[1], errors='coerce')
+    df['sample_no'] = extracted[2].astype(int)
+    df['field_no'] = extracted[3].astype(int)
+    df['order'] = extracted[4].astype(int)
+
+    # 过滤掉提取失败的行
+    df_filtered = df.dropna(subset=['magnification', 'NA', 'sample_no', 'field_no', 'order'])
+
+    # 按提取后的字段进行分组，计算中位数和行数
+    grouped_df = df_filtered.groupby(
+        ['magnification', 'NA', 'sample_no', 'field_no', 'order'],
+        as_index=False
+    ).agg(
+        label=('label', 'median'),
+        pt_pred=('pt_pred', 'median'),
+        onnx_pred=('onnx_pred', 'median'),
+        onnx_time_cost=('onnx_time_cost', 'median'),
+        count=('label', 'size')  # 新增：每组行数统计
+    )
+
+    # 调整列顺序，将 count 插入到 NA 后面
+    columns_order = [
+        'magnification', 'NA', 'count', 'sample_no', 'field_no', 'order',
+        'label', 'pt_pred', 'onnx_pred', 'onnx_time_cost'
+    ]
+    grouped_df = grouped_df[columns_order]
+
+    # 添加基于已有列计算的新列
+    grouped_df['pt_error'] = (grouped_df['label'] - grouped_df['pt_pred']).abs()
+    grouped_df['pt_signed_error'] = grouped_df['label'] - grouped_df['pt_pred']
+    grouped_df['pt_direction'] = np.sign(grouped_df['label'] * grouped_df['pt_pred'])
+
+    grouped_df['onnx_error'] = (grouped_df['label'] - grouped_df['onnx_pred']).abs()
+    grouped_df['onnx_signed_error'] = grouped_df['label'] - grouped_df['onnx_pred']
+    grouped_df['onnx_direction'] = np.sign(grouped_df['label'] * grouped_df['onnx_pred'])
+
+    # 添加统计信息作为新列
+    grouped_df['pt_error_mean'] = grouped_df['pt_error'].mean()
+    grouped_df['pt_error_std'] = grouped_df['pt_error'].std()
+
+    grouped_df['onnx_error_mean'] = grouped_df['onnx_error'].mean()
+    grouped_df['onnx_error_std'] = grouped_df['onnx_error'].std()
+
+    grouped_df['onnx_time_cost_mean'] = grouped_df['onnx_time_cost'].mean()
+    grouped_df['onnx_time_cost_std'] = grouped_df['onnx_time_cost'].std()
+
+    # 保存处理结果
+    csv_grouped_path = save_dir / f"MO_grouped_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_results.csv"
+    grouped_df.to_csv(csv_grouped_path, index=False)
+    print(f"分组测试结果已保存至: {csv_grouped_path}")
 
 
 def main():
     args = parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    glob_pattern = "*.csv" if args.dataset_choice == "all" else f"{args.dataset_choice}*.csv"
     
     # 加载测试集（包含辅助输入）
     test_set = MOAFDataset(
-        root_dir=Path(args.root_dir),
+        dataset_dir=Path(args.dataset_dir),
         dataset_type='test',
         transform=transforms.ToTensor(),
-        glob_pattern="*.csv"
+        glob_pattern=glob_pattern,
+        label_choice=args.label_choice
     )
     
     # 创建PyTorch数据加载器
@@ -165,13 +245,13 @@ def main():
     # 初始化模型并加载最佳检查点
     model = MOAFModel(model_name=args.fe_str, fusion_mode=args.fusion_mode).to(device)
     ckpt = torch.load(
-        Path('.ckpts') / f"MO_{args.fe_str}_{args.fusion_mode}" / 'ckpt_best.pt',
+        Path('.ckpts') / f"MO_{args.fe_str}_{args.fusion_mode}_{args.dataset_choice}_{args.label_choice}" / 'ckpt_best.pt',
         map_location=device
     )
     model.load_state_dict(ckpt['model'])
     
     # 转换ONNX模型
-    onnx_path = convert_to_onnx(model, device, args.fe_str, args.fusion_mode)
+    onnx_path = convert_to_onnx(model, device, args.fe_str, args.fusion_mode, args.dataset_choice, args.label_choice)
     print(f"ONNX模型已保存至: {onnx_path}")
     
     # 测试PyTorch模型
@@ -179,7 +259,7 @@ def main():
     print("PyTorch模型测试结束")
     
     # 测试ONNX模型
-    onnx_preds, onnx_times = test_onnx_model(onnx_path, test_set)
+    onnx_preds, onnx_times = test_onnx_model(onnx_path, test_set, args.fusion_mode)
     print("ONNX模型测试结束")
     
     # 收集结果
@@ -196,7 +276,8 @@ def main():
         ))
     
     # 保存结果
-    save_results(results, args.fe_str, args.fusion_mode)
+
+    save_results(results, args.fe_str, args.fusion_mode, args.dataset_choice, args.label_choice)
 
 if __name__ == '__main__':
     main()

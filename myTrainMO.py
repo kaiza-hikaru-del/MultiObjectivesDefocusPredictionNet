@@ -16,13 +16,15 @@ from datetime import datetime
 # 训练参数配置
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root_dir', type=str, required=True, help='数据集根目录')
+    parser.add_argument('--dataset_dir', type=str, required=True, help='数据集根目录')
+    parser.add_argument('--dataset_choice', type=str, default="all", help='数据集筛选条件，可选: all, <magnification>_<NA>')
+    parser.add_argument('--label_choice', type=str, default="dof_score", help='数据集标签形式，可选：dof_score, defocus_distance')
     parser.add_argument('--epochs', type=int, default=800)
-    parser.add_argument('--lr', type=float, default=1e-5)
+    parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--fe_str', type=str, default='mobilenetv4_conv_small')
-    parser.add_argument('--fusion_mode', type=str, default='film', help='特征融合模式，可选: film, add, concat, gating')
+    parser.add_argument('--fusion_mode', type=str, default='film', help='特征融合模式，可选: no_fusion, add, concat, film, gating')
     parser.add_argument('--device_ids', type=str, default='0', help='使用的GPU编号，例如 0,1,2 或留空使用CPU')
     parser.add_argument('--resume', action='store_true', help='从最佳检查点恢复训练')
     return parser.parse_args()
@@ -83,17 +85,21 @@ def main():
     val_transform = transforms.ToTensor()
 
     # 数据集加载
+    glob_pattern = "*.csv" if args.dataset_choice == "all" else f"{args.dataset_choice}*.csv"
+    print(f"glob_pattern: {glob_pattern}")
     train_set = MOAFDataset(
-        root_dir=Path(args.root_dir),
+        dataset_dir=Path(args.dataset_dir),
         dataset_type='train',
         transform=train_transform,
-        glob_pattern="*.csv"
+        glob_pattern=glob_pattern,
+        label_choice=args.label_choice
     )
     val_set = MOAFDataset(
-        root_dir=Path(args.root_dir),
+        dataset_dir=Path(args.dataset_dir),
         dataset_type='val',
         transform=val_transform,
-        glob_pattern="*.csv"
+        glob_pattern=glob_pattern,
+        label_choice=args.label_choice
     )
 
     train_loader = DataLoader(
@@ -126,7 +132,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     # === 检查点设置 ===
-    ckpt_dir = Path(f'.ckpts/MO_{args.fe_str}_{args.fusion_mode}')
+    ckpt_dir = Path(f'.ckpts/MO_{args.fe_str}_{args.fusion_mode}_{args.dataset_choice}_{args.label_choice}')
     ckpt_dir.mkdir(exist_ok=True, parents=True)
     best_ckpt = ckpt_dir / 'ckpt_best.pt'
 
@@ -144,7 +150,7 @@ def main():
         print(f'从检查点恢复训练，当前轮数：{start_epoch}，最佳损失：{best_loss:.4f}')
 
     # === TensorBoard 配置 ===
-    with SummaryWriter(f'.runs/MO_{args.fe_str}_{args.fusion_mode}') as writer:
+    with SummaryWriter(f'.runs/MO_{args.fe_str}_{args.fusion_mode}_{args.dataset_choice}_{args.label_choice}') as writer:
         for epoch in range(start_epoch, args.epochs):
             start_time = time.time()
 
