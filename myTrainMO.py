@@ -11,6 +11,7 @@ from myModel import MOAFModel
 from torchvision import transforms
 from tqdm.rich import tqdm
 from datetime import datetime
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, ChainedScheduler
 
 
 # 训练参数配置
@@ -27,23 +28,27 @@ def parse_args():
     parser.add_argument('--fusion_mode', type=str, default='film', help='特征融合模式，可选: no_fusion, add, concat, film, gating')
     parser.add_argument('--device_ids', type=str, default='0', help='使用的GPU编号，例如 0,1,2 或留空使用CPU')
     parser.add_argument('--resume', action='store_true', help='从最佳检查点恢复训练')
+    parser.add_argument('--warmup_epochs', type=int, default=5, help='预热阶段的 epoch 数')
+    parser.add_argument('--eta_min', type=float, default=1e-6, help='余弦退火的最小学习率')
     return parser.parse_args()
 
 
 # 训练流程封装
-def train_epoch(model, loader, criterion, optimizer, device):
+# 修改函数定义，添加 scheduler 参数
+def train_epoch(model, loader, criterion, optimizer, scheduler, device):
     model.train()
     total_loss = 0.0
     for images, aux_inputs, labels in tqdm(loader, desc="Training", leave=False):
         images = images.to(device)
         aux_inputs = aux_inputs.to(device)
-        labels = labels.unsqueeze(1).to(device)  # 保持维度一致
+        labels = labels.unsqueeze(1).to(device)
 
         optimizer.zero_grad()
         outputs = model(images, aux_inputs)
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
+        scheduler.step()  # 每个 batch 更新学习率
 
         total_loss += loss.item() * images.size(0)
     return total_loss / len(loader.dataset)
@@ -131,6 +136,25 @@ def main():
     criterion = torch.nn.L1Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    # 计算预热和余弦退火的步数
+    warmup_steps = args.warmup_epochs * len(train_loader)
+    total_steps = args.epochs * len(train_loader)
+    cosine_steps = total_steps - warmup_steps
+
+    # 预热调度器（线性增加学习率）
+    warmup_scheduler = LinearLR(optimizer, 
+                                start_factor=0.1, 
+                                end_factor=1.0, 
+                                total_iters=warmup_steps)
+
+    # 余弦退火调度器
+    cosine_scheduler = CosineAnnealingLR(optimizer, 
+                                        T_max=cosine_steps, 
+                                        eta_min=args.eta_min)
+
+    # 组合调度器
+    scheduler = ChainedScheduler([warmup_scheduler, cosine_scheduler])
+
     # === 检查点设置 ===
     ckpt_dir = Path(f'.ckpts/MO_{args.fe_str}_{args.fusion_mode}_{args.dataset_choice}_{args.label_choice}')
     ckpt_dir.mkdir(exist_ok=True, parents=True)
@@ -141,13 +165,14 @@ def main():
     print("Model created")
 
     # === 恢复训练 ===
+    # 恢复训练时加载 scheduler 状态
     if args.resume and best_ckpt.exists():
         checkpoint = torch.load(best_ckpt, map_location=device, weights_only=True)
-        model.load_state_dict(checkpoint['model'], strict=False)  # 允许部分加载
+        model.load_state_dict(checkpoint['model'], strict=False)
         optimizer.load_state_dict(checkpoint['optimizer'])
+        scheduler.load_state_dict(checkpoint['scheduler'])  # 新增
         start_epoch = checkpoint['epoch'] + 1
         best_loss = checkpoint['best_loss']
-        print(f'从检查点恢复训练，当前轮数：{start_epoch}，最佳损失：{best_loss:.4f}')
 
     # === TensorBoard 配置 ===
     with SummaryWriter(f'.runs/MO_{args.fe_str}_{args.fusion_mode}_{args.dataset_choice}_{args.label_choice}') as writer:
@@ -155,7 +180,7 @@ def main():
             start_time = time.time()
 
             # 训练与验证
-            train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
+            train_loss = train_epoch(model, train_loader, criterion, optimizer, scheduler, device)
             val_loss = validation_epoch(model, val_loader, criterion, device)
 
             # 学习率记录
@@ -184,10 +209,12 @@ def main():
             if save_regular:
                 # 保存时不带 DataParallel 的 module 前缀
                 save_model = model.module if isinstance(model, nn.DataParallel) else model
+                # 保存检查点时添加 scheduler 状态
                 torch.save({
                     'epoch': epoch,
                     'model': save_model.state_dict(),
                     'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),  # 新增
                     'best_loss': best_loss,
                     'args': vars(args)
                 }, ckpt_path)
@@ -198,10 +225,12 @@ def main():
             if is_best:
                 best_loss = val_loss
                 save_model = model.module if isinstance(model, nn.DataParallel) else model
+                # 保存检查点时添加 scheduler 状态
                 torch.save({
                     'epoch': epoch,
                     'model': save_model.state_dict(),
                     'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),  # 新增
                     'best_loss': best_loss,
                     'args': vars(args)
                 }, best_ckpt)

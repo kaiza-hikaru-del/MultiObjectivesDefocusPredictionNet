@@ -1,3 +1,4 @@
+import os
 import argparse
 import time
 import pandas as pd
@@ -22,6 +23,7 @@ def parse_args():
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--fe_str', type=str, default='mobilenetv4_conv_small')
     parser.add_argument('--fusion_mode', type=str, default='film', help='特征融合模式，可选: no_fusion, add, concat, film, gating')
+    parser.add_argument('--device_ids', type=str, default='0', help='使用的GPU编号，例如 0,1,2 或留空使用CPU')
     return parser.parse_args()
 
 
@@ -67,8 +69,14 @@ def test_pytorch_model(model, loader, device):
     return all_labels, all_preds
 
 
-def test_onnx_model(onnx_path, dataset, fusion_mode):
-    session = onnxruntime.InferenceSession(onnx_path, providers=["CUDAExecutionProvider"])
+def test_onnx_model(onnx_path, dataset, fusion_mode, onnx_gpu_id):
+    providers = []
+    if torch.cuda.is_available():
+        providers.append(('CUDAExecutionProvider', {'device_id': onnx_gpu_id}))
+    else:
+        providers.append('CPUExecutionProvider')
+
+    session = onnxruntime.InferenceSession(onnx_path, providers=providers)
     print(f"ONNX session providers: {session.get_providers()}")
     print(f"ONNX session provider options: {session.get_provider_options()}")
     all_preds = []
@@ -223,6 +231,12 @@ def main():
     args = parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # 解析 device_ids 参数
+    device_ids = [int(i) for i in args.device_ids.split(',')] if ',' in args.device_ids else [int(args.device_ids)]
+    os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(map(str, device_ids))
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}, GPU IDs: {device_ids}")
+
     glob_pattern = "*.csv" if args.dataset_choice == "all" else f"{args.dataset_choice}*.csv"
     
     # 加载测试集（包含辅助输入）
@@ -259,7 +273,12 @@ def main():
     print("PyTorch模型测试结束")
     
     # 测试ONNX模型
-    onnx_preds, onnx_times = test_onnx_model(onnx_path, test_set, args.fusion_mode)
+    onnx_preds, onnx_times = test_onnx_model(
+        onnx_path, 
+        test_set, 
+        args.fusion_mode,
+        onnx_gpu_id=device_ids[0] if torch.cuda.is_available() else None
+    )
     print("ONNX模型测试结束")
     
     # 收集结果
