@@ -110,7 +110,7 @@ def test_onnx_model(onnx_path, dataset, fusion_mode, onnx_gpu_id):
 
 
 def save_results(results, fe_str, fusion_mode, dataset_choice, label_choice):
-    save_dir = Path(".results")
+    save_dir = Path(f".results/MO_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}")
     save_dir.mkdir(exist_ok=True, parents=True)
     
     # === 未分组结果 ===
@@ -137,25 +137,6 @@ def save_results(results, fe_str, fusion_mode, dataset_choice, label_choice):
         'onnx_pred': 'float32',
         'onnx_time_cost': 'float64'
     })
-
-    # 添加基于已有列计算的新列
-    df['pt_error'] = (df['label'] - df['pt_pred']).abs()
-    df['pt_signed_error'] = df['label'] - df['pt_pred']
-    df['pt_direction'] = np.sign(df['label'] * df['pt_pred'])
-
-    df['onnx_error'] = (df['label'] - df['onnx_pred']).abs()
-    df['onnx_signed_error'] = df['label'] - df['onnx_pred']
-    df['onnx_direction'] = np.sign(df['label'] * df['onnx_pred'])
-
-    # 添加统计信息作为新列
-    df['pt_error_mean'] = df['pt_error'].mean()
-    df['pt_error_std'] = df['pt_error'].std()
-
-    df['onnx_error_mean'] = df['onnx_error'].mean()
-    df['onnx_error_std'] = df['onnx_error'].std()
-
-    df['onnx_time_cost_mean'] = df['onnx_time_cost'].mean()
-    df['onnx_time_cost_std'] = df['onnx_time_cost'].std()
     
     csv_path = save_dir / f"MO_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_results.csv"
     df.to_csv(csv_path, index=False)
@@ -202,29 +183,110 @@ def save_results(results, fe_str, fusion_mode, dataset_choice, label_choice):
     ]
     grouped_df = grouped_df[columns_order]
 
-    # 添加基于已有列计算的新列
-    grouped_df['pt_error'] = (grouped_df['label'] - grouped_df['pt_pred']).abs()
+    # === 统计结果 ===
+    # 1. 计算理论景深
+    grouped_df['dof'] = 550 / (grouped_df['NA'] ** 2) + 3450 / (grouped_df['magnification'] * grouped_df['NA'])
+
+    # 2. 根据 label_choice 处理归一化
+    if label_choice == "defocus_distance":
+        grouped_df.rename(columns={
+            'label': 'label_distance',
+            'pt_pred': 'pt_pred_distance',
+            'onnx_pred': 'onnx_pred_distance'
+        }, inplace=True)
+        grouped_df['label'] = grouped_df['label_distance'] / grouped_df['dof']
+        grouped_df['pt_pred'] = grouped_df['pt_pred_distance'] / grouped_df['dof']
+        grouped_df['onnx_pred'] = grouped_df['onnx_pred_distance'] / grouped_df['dof']
+
+    # 3. 计算误差及方向
+    grouped_df['pt_error'] = abs(grouped_df['label'] - grouped_df['pt_pred'])
     grouped_df['pt_signed_error'] = grouped_df['label'] - grouped_df['pt_pred']
     grouped_df['pt_direction'] = np.sign(grouped_df['label'] * grouped_df['pt_pred'])
 
-    grouped_df['onnx_error'] = (grouped_df['label'] - grouped_df['onnx_pred']).abs()
+    grouped_df['onnx_error'] = abs(grouped_df['label'] - grouped_df['onnx_pred'])
     grouped_df['onnx_signed_error'] = grouped_df['label'] - grouped_df['onnx_pred']
     grouped_df['onnx_direction'] = np.sign(grouped_df['label'] * grouped_df['onnx_pred'])
-
-    # 添加统计信息作为新列
-    grouped_df['pt_error_mean'] = grouped_df['pt_error'].mean()
-    grouped_df['pt_error_std'] = grouped_df['pt_error'].std()
-
-    grouped_df['onnx_error_mean'] = grouped_df['onnx_error'].mean()
-    grouped_df['onnx_error_std'] = grouped_df['onnx_error'].std()
-
-    grouped_df['onnx_time_cost_mean'] = grouped_df['onnx_time_cost'].mean()
-    grouped_df['onnx_time_cost_std'] = grouped_df['onnx_time_cost'].std()
 
     # 保存处理结果
     csv_grouped_path = save_dir / f"MO_grouped_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_results.csv"
     grouped_df.to_csv(csv_grouped_path, index=False)
     print(f"分组测试结果已保存至: {csv_grouped_path}")
+
+    # 4. 根据 dataset_choice 和 label_choice 分组处理
+    if dataset_choice == "all":
+        groups = grouped_df.groupby(['magnification', 'NA'])
+        for (mag, na), group in groups:
+            # 计算统计指标
+            pt_error_avg = group['pt_error'].mean()
+            pt_error_std = group['pt_error'].std()
+            pt_1_3dof_acc = ((group['pt_error'] < (1 / (3 * 2)))).mean()
+            pt_1_2dof_acc = ((group['pt_error'] < (1 / (2 * 2)))).mean()
+            pt_1_1dof_acc = ((group['pt_error'] < (1 / (1 * 2)))).mean()
+            pt_dss = (group['pt_direction'] >= 0).mean()
+
+            onnx_error_avg = group['onnx_error'].mean()
+            onnx_error_std = group['onnx_error'].std()
+            onnx_1_3dof_acc = ((group['onnx_error'] < (1 / (3 * 2)))).mean()
+            onnx_1_2dof_acc = ((group['onnx_error'] < (1 / (2 * 2)))).mean()
+            onnx_1_1dof_acc = ((group['onnx_error'] < (1 / (1 * 2)))).mean()
+            onnx_dss = (group['onnx_direction'] >= 0).mean()
+
+            stats = {
+                'pt_error_avg': pt_error_avg,
+                'pt_error_std': pt_error_std,
+                'pt_1#3dof_acc': pt_1_3dof_acc,
+                'pt_1#2dof_acc': pt_1_2dof_acc,
+                'pt_1#1dof_acc': pt_1_1dof_acc,
+                'pt_dss': pt_dss,
+                'onnx_error_avg': onnx_error_avg,
+                'onnx_error_std': onnx_error_std,
+                'onnx_1#3dof_acc': onnx_1_3dof_acc,
+                'onnx_1#2dof_acc': onnx_1_2dof_acc,
+                'onnx_1#1dof_acc': onnx_1_1dof_acc,
+                'onnx_dss': onnx_dss
+            }
+
+            stats_df = pd.DataFrame([stats])
+            mag_str = str(int(mag)) if isinstance(mag, float) and mag.is_integer() else str(mag)
+            na_str = f"{na:.2f}"
+            filename = f"P_({mag_str}x_{na_str})_MO_grouped_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_results.csv"
+            stats_df.to_csv(save_dir / filename, index=False)
+            print(f"分组统计结果已保存至: {save_dir / filename}")
+
+    # 计算整体统计指标
+    pt_error_avg = grouped_df['pt_error'].mean()
+    pt_error_std = grouped_df['pt_error'].std()
+    pt_1_3dof_acc = ((grouped_df['pt_error'] < (1 / (3 * 2)))).mean()
+    pt_1_2dof_acc = ((grouped_df['pt_error'] < (1 / (2 * 2)))).mean()
+    pt_1_1dof_acc = ((grouped_df['pt_error'] < (1 / (1 * 2)))).mean()
+    pt_dss = (grouped_df['pt_direction'] >= 0).mean()
+
+    onnx_error_avg = grouped_df['onnx_error'].mean()
+    onnx_error_std = grouped_df['onnx_error'].std()
+    onnx_1_3dof_acc = ((grouped_df['onnx_error'] < (1 / (3 * 2)))).mean()
+    onnx_1_2dof_acc = ((grouped_df['onnx_error'] < (1 / (2 * 2)))).mean()
+    onnx_1_1dof_acc = ((grouped_df['onnx_error'] < (1 / (1 * 2)))).mean()
+    onnx_dss = (grouped_df['onnx_direction'] >= 0).mean()
+
+    stats = {
+        'pt_error_avg': pt_error_avg,
+        'pt_error_std': pt_error_std,
+        'pt_1#3dof_acc': pt_1_3dof_acc,
+        'pt_1#2dof_acc': pt_1_2dof_acc,
+        'pt_1#1dof_acc': pt_1_1dof_acc,
+        'pt_dss': pt_dss,
+        'onnx_error_avg': onnx_error_avg,
+        'onnx_error_std': onnx_error_std,
+        'onnx_1#3dof_acc': onnx_1_3dof_acc,
+        'onnx_1#2dof_acc': onnx_1_2dof_acc,
+        'onnx_1#1dof_acc': onnx_1_1dof_acc,
+        'onnx_dss': onnx_dss
+    }
+
+    stats_df = pd.DataFrame([stats])
+    filename = f"P_MO_grouped_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_results.csv"
+    stats_df.to_csv(save_dir / filename, index=False)
+    print(f"统计结果已保存至: {save_dir / filename}")
 
 
 def main():
@@ -260,7 +322,8 @@ def main():
     model = MOAFModel(model_name=args.fe_str, fusion_mode=args.fusion_mode).to(device)
     ckpt = torch.load(
         Path('.ckpts') / f"MO_{args.fe_str}_{args.fusion_mode}_{args.dataset_choice}_{args.label_choice}" / 'ckpt_best.pt',
-        map_location=device
+        map_location=device,
+        weights_only=True
     )
     model.load_state_dict(ckpt['model'])
     
