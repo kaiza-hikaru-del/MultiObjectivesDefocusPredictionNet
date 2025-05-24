@@ -20,15 +20,15 @@ def parse_args():
     parser.add_argument('--dataset_dir', type=str, required=True, help='数据集根目录')
     parser.add_argument('--dataset_choice', type=str, default="all", help='数据集筛选条件，可选: all, <magnification>_<NA>')
     parser.add_argument('--label_choice', type=str, default="dof_score", help='数据集标签形式，可选：dof_score, defocus_distance')
-    parser.add_argument('--epochs', type=int, default=800)
-    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--fe_str', type=str, default='mobilenetv4_conv_small')
     parser.add_argument('--fusion_mode', type=str, default='film', help='特征融合模式，可选: no_fusion, add, concat, film, gating')
     parser.add_argument('--device_ids', type=str, default='0', help='使用的GPU编号，例如 0,1,2 或留空使用CPU')
     parser.add_argument('--resume', action='store_true', help='从最佳检查点恢复训练')
-    parser.add_argument('--warmup_epochs', type=int, default=5, help='预热阶段的 epoch 数')
+    parser.add_argument('--warmup_epochs', type=int, default=10, help='预热阶段的 epoch 数')
     parser.add_argument('--eta_min', type=float, default=1e-6, help='余弦退火的最小学习率')
     return parser.parse_args()
 
@@ -156,7 +156,7 @@ def main():
     scheduler = ChainedScheduler([warmup_scheduler, cosine_scheduler])
 
     # === 检查点设置 ===
-    ckpt_dir = Path(f'.ckpts/MO_{args.fe_str}_{args.fusion_mode}_{args.dataset_choice}_{args.label_choice}')
+    ckpt_dir = Path(f'.ckpts/MO-{args.fe_str}-{args.fusion_mode}-{args.dataset_choice}-{args.label_choice}')
     ckpt_dir.mkdir(exist_ok=True, parents=True)
     best_ckpt = ckpt_dir / 'ckpt_best.pt'
 
@@ -175,7 +175,7 @@ def main():
         best_loss = checkpoint['best_loss']
 
     # === TensorBoard 配置 ===
-    with SummaryWriter(f'.runs/MO_{args.fe_str}_{args.fusion_mode}_{args.dataset_choice}_{args.label_choice}') as writer:
+    with SummaryWriter(f'.runs/MO-{args.fe_str}-{args.fusion_mode}-{args.dataset_choice}-{args.label_choice}') as writer:
         for epoch in range(start_epoch, args.epochs):
             start_time = time.time()
 
@@ -185,11 +185,6 @@ def main():
 
             # 学习率记录
             current_lr = optimizer.param_groups[0]['lr']
-
-            # TensorBoard记录
-            writer.add_scalar('Loss/train', train_loss, epoch)
-            writer.add_scalar('Loss/val', val_loss, epoch)
-            writer.add_scalar('Learning Rate', current_lr, epoch)
 
             # 生成检查点文件名
             ckpt_path = ckpt_dir / f'ckpt_{epoch:04d}.pt'
@@ -244,6 +239,12 @@ def main():
                   f'Val Loss: {val_loss:.4f} | '
                   f'Time: {epoch_time:.2f}s | '
                   f'Timestamp: {formatted_time}')
+            
+            # TensorBoard记录
+            writer.add_scalar('Loss/train', train_loss, epoch)
+            writer.add_scalar('Loss/val', val_loss, epoch)
+            writer.add_scalar('Other/Learning Rate', current_lr, epoch)
+            writer.add_scalar('Other/Epoch Time Cost', epoch_time, epoch)
 
 
 if __name__ == '__main__':

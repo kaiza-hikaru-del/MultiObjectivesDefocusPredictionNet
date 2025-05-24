@@ -110,7 +110,7 @@ def test_onnx_model(onnx_path, dataset, fusion_mode, onnx_gpu_id):
 
 
 def save_results(results, fe_str, fusion_mode, dataset_choice, label_choice):
-    save_dir = Path(f".results/MO_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}")
+    save_dir = Path(f".results/MO-{fe_str}-{fusion_mode}-{dataset_choice}-{label_choice}")
     save_dir.mkdir(exist_ok=True, parents=True)
     
     # === 未分组结果 ===
@@ -138,7 +138,7 @@ def save_results(results, fe_str, fusion_mode, dataset_choice, label_choice):
         'onnx_time_cost': 'float64'
     })
     
-    csv_path = save_dir / f"MO_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_results.csv"
+    csv_path = save_dir / f"MO-{fe_str}-{fusion_mode}-{dataset_choice}-{label_choice}-results.csv"
     df.to_csv(csv_path, index=False)
     print(f"原始测试结果已保存至: {csv_path}")
 
@@ -208,7 +208,7 @@ def save_results(results, fe_str, fusion_mode, dataset_choice, label_choice):
     grouped_df['onnx_direction'] = np.sign(grouped_df['label'] * grouped_df['onnx_pred'])
 
     # 保存处理结果
-    csv_grouped_path = save_dir / f"MO_grouped_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_results.csv"
+    csv_grouped_path = save_dir / f"MO-grouped-{fe_str}-{fusion_mode}-{dataset_choice}-{label_choice}-results.csv"
     grouped_df.to_csv(csv_grouped_path, index=False)
     print(f"分组测试结果已保存至: {csv_grouped_path}")
 
@@ -249,7 +249,7 @@ def save_results(results, fe_str, fusion_mode, dataset_choice, label_choice):
             stats_df = pd.DataFrame([stats])
             mag_str = str(int(mag)) if isinstance(mag, float) and mag.is_integer() else str(mag)
             na_str = f"{na:.2f}"
-            filename = f"P_({mag_str}x_{na_str})_MO_grouped_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_results.csv"
+            filename = f"P-({mag_str}x_{na_str})-MO-grouped-{fe_str}-{fusion_mode}-{dataset_choice}-{label_choice}-results.csv"
             stats_df.to_csv(save_dir / filename, index=False)
             print(f"分组统计结果已保存至: {save_dir / filename}")
 
@@ -284,7 +284,7 @@ def save_results(results, fe_str, fusion_mode, dataset_choice, label_choice):
     }
 
     stats_df = pd.DataFrame([stats])
-    filename = f"P_MO_grouped_{fe_str}_{fusion_mode}_{dataset_choice}_{label_choice}_results.csv"
+    filename = f"P-MO-grouped-{fe_str}-{fusion_mode}-{dataset_choice}-{label_choice}-results.csv"
     stats_df.to_csv(save_dir / filename, index=False)
     print(f"统计结果已保存至: {save_dir / filename}")
 
@@ -321,7 +321,7 @@ def main():
     # 初始化模型并加载最佳检查点
     model = MOAFModel(model_name=args.fe_str, fusion_mode=args.fusion_mode).to(device)
     ckpt = torch.load(
-        Path('.ckpts') / f"MO_{args.fe_str}_{args.fusion_mode}_{args.dataset_choice}_{args.label_choice}" / 'ckpt_best.pt',
+        Path('.ckpts') / f"MO-{args.fe_str}-{args.fusion_mode}-{args.dataset_choice}-{args.label_choice}" / 'ckpt_best.pt',
         map_location=device,
         weights_only=True
     )
